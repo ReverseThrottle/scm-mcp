@@ -5,7 +5,7 @@ Registers all tool modules and starts the server over stdio transport.
 
 from mcp.server.fastmcp import FastMCP
 
-from src.tools import network, objects, operations, policy_objects, profiles, search, security, setup
+from src.tools import migration, network, objects, operations, policy_objects, profiles, search, security, setup
 
 mcp = FastMCP(
     name="scm",
@@ -31,6 +31,7 @@ network.register(mcp)
 profiles.register(mcp)
 operations.register(mcp)
 search.register(mcp)
+migration.register(mcp)
 
 
 def main() -> None:

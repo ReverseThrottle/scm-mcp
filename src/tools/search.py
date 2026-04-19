@@ -7,58 +7,113 @@ from mcp.server.fastmcp import FastMCP
 from src.client import get_client
 from src.utils import handle_error, serialize
 
-# All searchable resource types and how to list them.
-# Each entry: (accessor_attr, list_kwargs_fn, label)
-# list_kwargs_fn receives (folder, rulebase) and returns kwargs for .list()
-_RESOURCE_REGISTRY: list[tuple[str, callable, str]] = [
-    # Setup
-    ("folder",                      lambda f, r: {},                            "folders"),
-    ("snippet",                     lambda f, r: {},                            "snippets"),
+# All searchable resource types.
+# Each entry: (accessor_attr, needs_folder, is_rule, label)
+# is_rule=True means the list() call takes rulebase/position and we iterate per rulebase.
+# is_rule="nat" uses position= instead of rulebase=.
+_RESOURCE_REGISTRY: list[tuple[str, bool, str | bool, str]] = [
+    # Setup (global scope — no folder required)
+    ("folder",                           False, False, "folders"),
+    ("snippet",                          False, False, "snippets"),
     # Objects
-    ("address",                     lambda f, r: {"folder": f},                 "addresses"),
-    ("address_group",               lambda f, r: {"folder": f},                 "address_groups"),
-    ("service",                     lambda f, r: {"folder": f},                 "services"),
-    ("service_group",               lambda f, r: {"folder": f},                 "service_groups"),
-    ("tag",                         lambda f, r: {"folder": f},                 "tags"),
-    ("log_forwarding_profile",      lambda f, r: {"folder": f},                 "log_forwarding_profiles"),
-    ("http_server_profile",         lambda f, r: {"folder": f},                 "http_server_profiles"),
-    ("syslog_server_profile",       lambda f, r: {"folder": f},                 "syslog_server_profiles"),
+    ("address",                          True,  False, "addresses"),
+    ("address_group",                    True,  False, "address_groups"),
+    ("service",                          True,  False, "services"),
+    ("service_group",                    True,  False, "service_groups"),
+    ("tag",                              True,  False, "tags"),
+    ("log_forwarding_profile",           True,  False, "log_forwarding_profiles"),
+    ("http_server_profile",              True,  False, "http_server_profiles"),
+    ("syslog_server_profile",            True,  False, "syslog_server_profiles"),
     # Policy objects
-    ("application",                 lambda f, r: {"folder": f},                 "applications"),
-    ("application_group",           lambda f, r: {"folder": f},                 "application_groups"),
-    ("application_filter",          lambda f, r: {"folder": f},                 "application_filters"),
-    ("schedule",                    lambda f, r: {"folder": f},                 "schedules"),
-    ("external_dynamic_list",       lambda f, r: {"folder": f},                 "external_dynamic_lists"),
+    ("application",                      True,  False, "applications"),
+    ("application_group",                True,  False, "application_groups"),
+    ("application_filter",               True,  False, "application_filters"),
+    ("schedule",                         True,  False, "schedules"),
+    ("external_dynamic_list",            True,  False, "external_dynamic_lists"),
     # Security rules
-    ("security_rule",               lambda f, r: {"folder": f, "rulebase": r},  "security_rules"),
-    ("decryption_rule",             lambda f, r: {"folder": f, "rulebase": r},  "decryption_rules"),
-    ("authentication_rule",         lambda f, r: {"folder": f, "rulebase": r},  "authentication_rules"),
+    ("security_rule",                    True,  True,  "security_rules"),
+    ("decryption_rule",                  True,  True,  "decryption_rules"),
+    ("authentication_rule",              True,  True,  "authentication_rules"),
     # Network rules
-    ("nat_rule",                    lambda f, r: {"folder": f, "position": r},  "nat_rules"),
-    ("pbf_rule",                    lambda f, r: {"folder": f, "rulebase": r},  "pbf_rules"),
-    ("qos_rule",                    lambda f, r: {"folder": f, "rulebase": r},  "qos_rules"),
+    ("nat_rule",                         True,  "nat", "nat_rules"),
+    ("pbf_rule",                         True,  True,  "pbf_rules"),
+    ("qos_rule",                         True,  True,  "qos_rules"),
     # Security zones
-    ("security_zone",               lambda f, r: {"folder": f},                 "security_zones"),
+    ("security_zone",                    True,  False, "security_zones"),
     # Profiles
-    ("anti_spyware_profile",        lambda f, r: {"folder": f},                 "anti_spyware_profiles"),
-    ("wildfire_antivirus_profile",  lambda f, r: {"folder": f},                 "wildfire_profiles"),
-    ("vulnerability_protection_profile", lambda f, r: {"folder": f},           "vulnerability_profiles"),
-    ("url_access_profile",          lambda f, r: {"folder": f},                 "url_access_profiles"),
-    ("url_category",                lambda f, r: {"folder": f},                 "url_categories"),
-    ("dns_security_profile",        lambda f, r: {"folder": f},                 "dns_security_profiles"),
-    ("decryption_profile",          lambda f, r: {"folder": f},                 "decryption_profiles"),
-    ("file_blocking_profile",       lambda f, r: {"folder": f},                 "file_blocking_profiles"),
-    ("zone_protection_profile",     lambda f, r: {"folder": f},                 "zone_protection_profiles"),
+    ("anti_spyware_profile",             True,  False, "anti_spyware_profiles"),
+    ("wildfire_antivirus_profile",       True,  False, "wildfire_profiles"),
+    ("vulnerability_protection_profile", True,  False, "vulnerability_profiles"),
+    ("url_access_profile",               True,  False, "url_access_profiles"),
+    ("url_category",                     True,  False, "url_categories"),
+    ("dns_security_profile",             True,  False, "dns_security_profiles"),
+    ("decryption_profile",               True,  False, "decryption_profiles"),
+    ("file_blocking_profile",            True,  False, "file_blocking_profiles"),
+    ("zone_protection_profile",          True,  False, "zone_protection_profiles"),
 ]
 
-# Resource types that don't require a folder (global scope)
-_NO_FOLDER_TYPES = {"folders", "snippets"}
+# String fields to scan when search_fields=True (covers rules and common objects)
+_FIELD_SCAN_KEYS = {
+    "source", "destination", "application", "service",
+    "from", "to", "from_",           # rule zones (from_ is the Python alias)
+    "static",                         # address group members
+    "members",                        # service/app group members
+    "ip_netmask", "ip_range", "fqdn", "ip_wildcard",  # address values
+    "list",                           # url category entries
+    "profile_setting", "log_setting",
+}
 
 
-def _matches(name: str, query: str, exact: bool) -> bool:
+def _name_matches(name: str, query: str, exact: bool) -> bool:
     if exact:
         return name == query
     return query.lower() in name.lower()
+
+
+def _fields_match(obj: dict, query: str) -> bool:
+    """Return True if query appears in any scannable field value of obj."""
+    q = query.lower()
+    for key, val in obj.items():
+        if key not in _FIELD_SCAN_KEYS:
+            continue
+        if isinstance(val, str) and q in val.lower():
+            return True
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, str) and q in item.lower():
+                    return True
+        if isinstance(val, dict):
+            # e.g. profile_setting = {"group": ["best-practice"]}
+            for inner in val.values():
+                if isinstance(inner, str) and q in inner.lower():
+                    return True
+                if isinstance(inner, list):
+                    for item in inner:
+                        if isinstance(item, str) and q in item.lower():
+                            return True
+    return False
+
+
+def _list_resource(resource, needs_folder: bool, is_rule, folder: str | None,
+                   snippet: str | None, rulebase: str, tags: list[str] | None) -> list:
+    """Call resource.list() with the right kwargs for this resource type."""
+    kwargs: dict = {}
+
+    if needs_folder:
+        if snippet:
+            kwargs["snippet"] = snippet
+        elif folder:
+            kwargs["folder"] = folder
+
+    if is_rule is True:
+        kwargs["rulebase"] = rulebase
+    elif is_rule == "nat":
+        kwargs["position"] = rulebase
+
+    if tags:
+        kwargs["tags"] = tags
+
+    return resource.list(**kwargs)
 
 
 def register(mcp: FastMCP) -> None:
@@ -68,32 +123,41 @@ def register(mcp: FastMCP) -> None:
     def scm_search(
         query: str,
         folder: str = "All",
+        folders: list[str] | None = None,
+        snippet: str | None = None,
         resource_types: list[str] | None = None,
         exact_match: bool = False,
+        search_fields: bool = False,
+        tags: list[str] | None = None,
         include_rulebases: list[str] | None = None,
         tsg_id: str | None = None,
     ) -> dict:
-        """Search for objects and rules by name across all (or selected) SCM resource types.
+        """Search for objects and rules by name (and optionally field values) across SCM.
 
-        Performs a case-insensitive substring search by default. Returns a dict keyed
-        by resource type containing all matching objects.
+        Performs a case-insensitive substring search by default. Returns results grouped
+        by resource type. Errors per type are reported separately so partial results
+        are always returned.
 
         Args:
-            query: Name to search for (substring match by default).
-            folder: Folder to search in (default 'All'). Ignored for folders/snippets
-                which are always global.
-            resource_types: Optional list of resource type names to limit the search.
-                Omit to search all types. Valid values:
-                folders, snippets, addresses, address_groups, services, service_groups,
-                tags, log_forwarding_profiles, http_server_profiles, syslog_server_profiles,
-                applications, application_groups, application_filters, schedules,
-                external_dynamic_lists, security_rules, decryption_rules,
-                authentication_rules, nat_rules, pbf_rules, qos_rules, security_zones,
-                anti_spyware_profiles, wildfire_profiles, vulnerability_profiles,
-                url_access_profiles, url_categories, dns_security_profiles,
-                decryption_profiles, file_blocking_profiles, zone_protection_profiles.
-            exact_match: If True, only return objects whose name exactly equals query
-                (case-sensitive). Default False.
+            query: String to search for. Matched against object names by default;
+                also matched against field values when search_fields=True.
+            folder: Single folder to search (default 'All'). Ignored when folders or
+                snippet is provided. Ignored for global types (folders, snippets).
+            folders: Search multiple folders in one call. Results are deduplicated by
+                object ID across folders. Overrides the folder param when provided.
+            snippet: Search within a snippet scope instead of a folder. Mutually
+                exclusive with folder/folders.
+            resource_types: Limit search to these resource type names. Omit to search
+                all 33 types. Use scm_list_resource_types() to see valid values.
+            exact_match: Match only objects whose name exactly equals query
+                (case-sensitive). Default False (substring, case-insensitive).
+            search_fields: Also match against field values — source, destination,
+                application, service, zone fields, address values (ip_netmask, fqdn,
+                ip_range), group members, URL list entries. Enables queries like
+                "find all rules referencing 10.10.1.0/24". Default False.
+            tags: Filter results to objects carrying ALL of these tags (applied at the
+                list() level where the SDK supports it; falls back to client-side
+                filtering for types that don't support server-side tag filtering).
             include_rulebases: For rule types, which rulebases to search.
                 Default ['pre', 'post']. Pass ['pre'] or ['post'] to limit.
             tsg_id: Optional TSG ID or named alias. Defaults to SCM_TSG_ID.
@@ -102,51 +166,74 @@ def register(mcp: FastMCP) -> None:
         client = get_client(tsg_id)
         results: dict[str, list[dict]] = {}
         errors: dict[str, str] = {}
-
         target_labels = set(resource_types) if resource_types else None
 
-        for attr, kwargs_fn, label in _RESOURCE_REGISTRY:
+        # Determine folder list to iterate over
+        search_folders: list[str | None]
+        if snippet:
+            search_folders = [None]   # snippet scope, no folder iteration
+        elif folders:
+            search_folders = folders
+        else:
+            search_folders = [folder]
+
+        for attr, needs_folder, is_rule, label in _RESOURCE_REGISTRY:
             if target_labels and label not in target_labels:
                 continue
 
             resource = getattr(client, attr)
-            folder_arg = None if label in _NO_FOLDER_TYPES else folder
-
-            # Rule types iterate over rulebases; others run once
-            if label in ("security_rules", "decryption_rules", "authentication_rules",
-                         "pbf_rules", "qos_rules"):
-                iters = rulebases
-            elif label == "nat_rules":
-                iters = rulebases
-            else:
-                iters = [None]
-
+            seen_ids: set[str] = set()
             matches: list[dict] = []
-            for rulebase in iters:
-                try:
-                    kwargs = kwargs_fn(folder_arg, rulebase)
-                    # Remove None-valued keys (e.g. folder for global types)
-                    kwargs = {k: v for k, v in kwargs.items() if v is not None}
-                    items = resource.list(**kwargs)
-                    for item in items:
-                        name = getattr(item, "name", None)
-                        if name and _matches(name, query, exact_match):
-                            serialized = serialize(item)
-                            if rulebase:
-                                serialized["_rulebase"] = rulebase
-                            matches.append(serialized)
-                except Exception as exc:
-                    errors[label] = str(exc)
+            had_error = False
+
+            folder_list = [None] if not needs_folder else search_folders
+            rulebase_list = rulebases if is_rule else [None]
+
+            for fold in folder_list:
+                if had_error:
                     break
+                for rb in rulebase_list:
+                    try:
+                        items = _list_resource(resource, needs_folder, is_rule,
+                                               fold, snippet if needs_folder else None,
+                                               rb, tags)
+                        for item in items:
+                            name = getattr(item, "name", None)
+                            if not name:
+                                continue
+                            serialized = serialize(item)
+                            obj_id = serialized.get("id") or name
+                            if obj_id in seen_ids:
+                                continue
+
+                            name_hit = _name_matches(name, query, exact_match)
+                            field_hit = search_fields and _fields_match(serialized, query)
+
+                            if name_hit or field_hit:
+                                seen_ids.add(obj_id)
+                                if rb:
+                                    serialized["_rulebase"] = rb
+                                if fold and len(search_folders) > 1:
+                                    serialized["_folder"] = fold
+                                matches.append(serialized)
+                    except Exception as exc:
+                        errors[label] = str(exc)
+                        had_error = True
+                        break
 
             if matches:
                 results[label] = matches
 
-        response: dict = {"query": query, "folder": folder, "results": results}
-        if errors:
-            response["errors"] = errors
-        response["total_matches"] = sum(len(v) for v in results.values())
-        return response
+        return {
+            "query": query,
+            "folders_searched": search_folders if needs_folder else [],
+            "snippet": snippet,
+            "search_fields": search_fields,
+            "tags_filter": tags,
+            "results": results,
+            "total_matches": sum(len(v) for v in results.values()),
+            **({"errors": errors} if errors else {}),
+        }
 
     @mcp.tool()
     def scm_list_resource_types() -> list[str]:
@@ -155,4 +242,4 @@ def register(mcp: FastMCP) -> None:
         Returns the complete list of searchable resource type names that can be
         passed as the resource_types argument to scm_search.
         """
-        return [label for _, _, label in _RESOURCE_REGISTRY]
+        return [label for _, _, _, label in _RESOURCE_REGISTRY]
