@@ -24,14 +24,28 @@ def _resolve_tsg(tsg_id: str | None) -> str:
     return alias_val if alias_val else tsg_id
 
 
+def _resolve_credentials(alias: str | None) -> tuple[str | None, str | None]:
+    """Return (client_id, client_secret) for the given alias, falling back to global defaults.
+
+    Per-TSG credentials use SCM_TSG_<ALIAS>_CLIENT_ID / SCM_TSG_<ALIAS>_CLIENT_SECRET.
+    """
+    if alias:
+        key = alias.upper()
+        per_id = os.environ.get(f"SCM_TSG_{key}_CLIENT_ID")
+        per_secret = os.environ.get(f"SCM_TSG_{key}_CLIENT_SECRET")
+        if per_id and per_secret:
+            return per_id, per_secret
+    return os.environ.get("SCM_CLIENT_ID"), os.environ.get("SCM_CLIENT_SECRET")
+
+
 def get_client(tsg_id: str | None = None) -> Scm:
     """Return a cached SCM client for the given TSG, validating credentials at first use."""
     resolved = _resolve_tsg(tsg_id)
     if resolved in _clients:
         return _clients[resolved]
 
-    client_id = os.environ.get("SCM_CLIENT_ID")
-    client_secret = os.environ.get("SCM_CLIENT_SECRET")
+    alias = tsg_id.upper() if tsg_id else None
+    client_id, client_secret = _resolve_credentials(alias)
 
     missing = [k for k, v in {
         "SCM_CLIENT_ID": client_id,
