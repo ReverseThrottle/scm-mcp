@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "scm-mcp"
+version = "0.1.0"
+description = "MCP server for Palo Alto Networks Strata Cloud Manager"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp[cli]>=1.0",
+    "pan-scm-sdk>=0.3.14",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+scm-mcp = "src.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.hatch.envs.default]
+type = "virtual"
+path = ".venv"
