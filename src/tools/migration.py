@@ -8,7 +8,7 @@ from src.client import get_client
 from src.utils import handle_error, serialize
 
 # Metadata fields set by the server — stripped before re-creating an object elsewhere.
-_META_FIELDS = {"id", "folder", "snippet", "device"}
+_META_FIELDS = {"id", "folder", "snippet", "device", "policy_type"}
 
 # Copyable object types in dependency order.
 # Types with dependencies come after the types they depend on so creates succeed.

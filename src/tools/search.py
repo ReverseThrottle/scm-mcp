@@ -148,7 +148,7 @@ def register(mcp: FastMCP) -> None:
             snippet: Search within a snippet scope instead of a folder. Mutually
                 exclusive with folder/folders.
             resource_types: Limit search to these resource type names. Omit to search
-                all 33 types. Use scm_list_resource_types() to see valid values.
+                all types. Use scm_list_resource_types() to see valid values.
             exact_match: Match only objects whose name exactly equals query
                 (case-sensitive). Default False (substring, case-insensitive).
             search_fields: Also match against field values — source, destination,
