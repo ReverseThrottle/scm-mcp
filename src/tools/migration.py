@@ -54,10 +54,18 @@ _ALL_OBJECT_LABELS = {label for _, label in _OBJECT_COPY_ORDER}
 _ALL_RULE_LABELS   = {label for _, label, _ in _RULE_COPY_ORDER}
 
 
+def _strip_nulls(obj: any) -> any:
+    """Recursively remove None values from dicts and lists."""
+    if isinstance(obj, dict):
+        return {k: _strip_nulls(v) for k, v in obj.items() if v is not None}
+    if isinstance(obj, list):
+        return [_strip_nulls(i) for i in obj]
+    return obj
+
+
 def _to_create_payload(obj: dict, dst_folder: str) -> dict:
-    """Strip server-assigned metadata and set the destination folder."""
-    payload = {k: v for k, v in obj.items()
-               if k not in _META_FIELDS and v is not None}
+    """Strip server-assigned metadata, remove nulls recursively, and set the destination folder."""
+    payload = _strip_nulls({k: v for k, v in obj.items() if k not in _META_FIELDS})
     payload["folder"] = dst_folder
     return payload
 
