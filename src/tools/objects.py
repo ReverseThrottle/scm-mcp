@@ -4,9 +4,39 @@ Log Forwarding Profiles, HTTP Server Profiles, Syslog Server Profiles."""
 from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
+from scm.models.objects import TagResponseModel
 
 from src.client import get_client
 from src.utils import handle_error, serialize
+
+
+def _list_tags_raw(tag_service, *, folder: str | None = None, snippet: str | None = None) -> list[dict]:
+    """Fetch tags via the raw API client, skipping items that fail pydantic validation.
+
+    The SDK's Tag.list() fails the entire batch if any tag has a name that violates
+    the model's name pattern. This helper fetches raw JSON and parses items individually
+    so that non-conforming tags are skipped rather than crashing the call.
+    """
+    params: dict = {"limit": 5000, "offset": 0}
+    if snippet:
+        params["snippet"] = snippet
+    elif folder:
+        params["folder"] = folder
+
+    results: list[dict] = []
+    while True:
+        response = tag_service.api_client.get("/config/objects/v1/tags", params=params)
+        data = response.get("data", [])
+        for item in data:
+            try:
+                results.append(serialize(TagResponseModel(**item)))
+            except Exception:
+                # Tag has an invalid name or malformed fields — keep raw dict
+                results.append(item)
+        if len(data) < params["limit"]:
+            break
+        params["offset"] += params["limit"]
+    return results
 
 
 def register(mcp: FastMCP) -> None:
@@ -496,15 +526,25 @@ def register(mcp: FastMCP) -> None:
     # -------------------------------------------------------------------------
 
     @mcp.tool()
-    def scm_list_tags(folder: str, tsg_id: str | None = None) -> list[dict] | dict:
-        """List tags in a folder.
+    def scm_list_tags(
+        folder: str | None = None,
+        snippet: str | None = None,
+        tsg_id: str | None = None,
+    ) -> list[dict] | dict:
+        """List tags in a folder or snippet.
 
         Args:
             folder: Folder name to scope the query.
+            snippet: Snippet name to scope the query (mutually exclusive with folder).
             tsg_id: Optional TSG ID or named alias. Defaults to SCM_TSG_ID.
         """
+        if not folder and not snippet:
+            return handle_error(ValueError("Either 'folder' or 'snippet' must be provided."))
         try:
-            return serialize(get_client(tsg_id).tag.list(folder=folder))
+            client = get_client(tsg_id)
+            if snippet:
+                return _list_tags_raw(client.tag, snippet=snippet)
+            return serialize(client.tag.list(folder=folder))
         except Exception as exc:
             return handle_error(exc)
 

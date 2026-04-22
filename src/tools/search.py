@@ -5,6 +5,7 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 
 from src.client import get_client
+from src.tools.objects import _list_tags_raw
 from src.utils import handle_error, serialize
 
 # All searchable resource types.
@@ -97,6 +98,13 @@ def _fields_match(obj: dict, query: str) -> bool:
 def _list_resource(resource, needs_folder: bool, is_rule, folder: str | None,
                    snippet: str | None, rulebase: str, tags: list[str] | None) -> list:
     """Call resource.list() with the right kwargs for this resource type."""
+    # Tags have a strict name-pattern validator that rejects the whole batch on one
+    # invalid name. Use the raw helper which parses per-item and skips bad names.
+    if hasattr(resource, "ENDPOINT") and resource.ENDPOINT == "/config/objects/v1/tags":
+        raw = _list_tags_raw(resource, folder=folder, snippet=snippet)
+        # Return lightweight objects that expose .name and serialize cleanly
+        return [_RawItem(r) for r in raw]
+
     kwargs: dict = {}
 
     if needs_folder:
@@ -114,6 +122,16 @@ def _list_resource(resource, needs_folder: bool, is_rule, folder: str | None,
         kwargs["tags"] = tags
 
     return resource.list(**kwargs)
+
+
+class _RawItem(dict):
+    """dict subclass so serialize() handles it as a plain dict while .name attribute access works."""
+
+    def __getattr__(self, name: str):
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(name)
 
 
 def register(mcp: FastMCP) -> None:
